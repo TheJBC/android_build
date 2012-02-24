@@ -24,8 +24,6 @@ PRODUCT_PACKAGES := \
     libdrmframework \
     libdrmframework_jni \
     libfwdlockengine \
-    libWnnEngDic \
-    libwnndict \
     WAPPushManager
 
 # Additional settings used in all AOSP builds
