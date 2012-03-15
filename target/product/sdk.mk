@@ -21,13 +21,12 @@ PRODUCT_PACKAGES := \
 	Calculator \
 	Camera \
 	DeskClock \
+	Development \
 	Email \
 	Exchange \
 	Gallery \
 	Music \
 	Mms \
-	libWnnEngDic \
-	libwnndict \
 	Phone \
 	SoftKeyboard \
 	SystemUI \
