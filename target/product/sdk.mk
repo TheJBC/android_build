@@ -26,8 +26,6 @@ PRODUCT_PACKAGES := \
 	Gallery \
 	Music \
 	Mms \
-	libWnnEngDic \
-	libwnndict \
 	Phone \
 	SoftKeyboard \
 	SystemUI \
