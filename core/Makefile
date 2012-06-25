@@ -883,6 +883,9 @@ endef
 endif # INTERNAL_USERIMAGES_USE_EXT
 
 $(BUILT_SYSTEMIMAGE): $(FULL_SYSTEMIMAGE_DEPS) $(INSTALLED_FILES_FILE)
+ifneq ($(PRODUCT_REMOVE_FILES),) 
+    $(shell rm -rf $(addprefix $(PRODUCT_OUT)/,$(PRODUCT_REMOVE_FILES)))
+endif 
 	$(call build-systemimage-target,$@)
 
 INSTALLED_SYSTEMIMAGE := $(PRODUCT_OUT)/system.img
@@ -1286,6 +1289,7 @@ $(INTERNAL_OTA_PACKAGE_TARGET): $(BUILT_TARGET_FILES_PACKAGE) $(OTATOOLS)
 	   -p $(HOST_OUT) \
 	   -k $(KEY_CERT_PAIR) \
 	   --backup=$(backuptool) \
+	   --configid=$(modelidcfg) \
 	   --override_device=$(override_device) \
 	   $(BUILT_TARGET_FILES_PACKAGE) $@
 
