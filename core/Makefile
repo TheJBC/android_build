@@ -883,9 +883,9 @@ endef
 endif # INTERNAL_USERIMAGES_USE_EXT
 
 $(BUILT_SYSTEMIMAGE): $(FULL_SYSTEMIMAGE_DEPS) $(INSTALLED_FILES_FILE)
-ifneq ($(PRODUCT_REMOVE_FILES),) 
-    $(shell rm -rf $(addprefix $(PRODUCT_OUT)/,$(PRODUCT_REMOVE_FILES)))
-endif 
+ifneq ($(PRODUCT_REMOVE_FILES),)
+	$(shell rm -rf $(addprefix $(PRODUCT_OUT)/,$(PRODUCT_REMOVE_FILES)))
+endif
 	$(call build-systemimage-target,$@)
 
 INSTALLED_SYSTEMIMAGE := $(PRODUCT_OUT)/system.img
