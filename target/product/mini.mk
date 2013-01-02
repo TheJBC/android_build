@@ -149,6 +149,7 @@ PRODUCT_PACKAGES += \
     screencap \
     sdptool \
     sensorservice \
+    telephony-common \
     wpa_supplicant
 
 PRODUCT_COPY_FILES += \
