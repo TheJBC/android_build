@@ -124,7 +124,6 @@ PRODUCT_PACKAGES += \
     sensorservice \
     lint \
     uiautomator \
-    telephony-common \
     mms-common \
     zoneinfo.dat \
     zoneinfo.idx \
