@@ -127,8 +127,8 @@ function setpaths()
     fi
     if [ -n "$ANDROID_PRE_BUILD_PATHS" ] ; then
         export PATH=${PATH/$ANDROID_PRE_BUILD_PATHS/}
-        # strip trailing ':', if any
-        export PATH=${PATH/%:/}
+        # strip leading ':', if any
+        export PATH=${PATH/:%/}
     fi
 
     # and in with the new
@@ -174,8 +174,8 @@ function setpaths()
     export ANDROID_TOOLCHAIN=$ANDROID_EABI_TOOLCHAIN
     export ANDROID_QTOOLS=$T/development/emulator/qtools
     export ANDROID_DEV_SCRIPTS=$T/development/scripts
-    export ANDROID_BUILD_PATHS=:$(get_build_var ANDROID_BUILD_PATHS):$ANDROID_QTOOLS:$ANDROID_TOOLCHAIN$ARM_EABI_TOOLCHAIN_PATH$CODE_REVIEWS:$ANDROID_DEV_SCRIPTS
-    export PATH=$PATH$ANDROID_BUILD_PATHS
+    export ANDROID_BUILD_PATHS=$(get_build_var ANDROID_BUILD_PATHS):$ANDROID_QTOOLS:$ANDROID_TOOLCHAIN$ARM_EABI_TOOLCHAIN_PATH$CODE_REVIEWS:$ANDROID_DEV_SCRIPTS:
+    export PATH=$ANDROID_BUILD_PATHS$PATH
 
     unset ANDROID_JAVA_TOOLCHAIN
     unset ANDROID_PRE_BUILD_PATHS
@@ -230,17 +230,29 @@ function settitle()
 {
     if [ "$STAY_OFF_MY_LAWN" = "" ]; then
         local arch=$(gettargetarch)
-        if [ -z "$OLD_PROMPT_COMMAND" ]; then
-            export OLD_PROMPT_COMMAND=$PROMPT_COMMAND
-        fi
         local product=$TARGET_PRODUCT
         local variant=$TARGET_BUILD_VARIANT
         local apps=$TARGET_BUILD_APPS
-        if [ -z "$apps" ]; then
-            export PROMPT_COMMAND="echo -ne \"\033]0;[${arch}-${product}-${variant}] ${USER}@${HOSTNAME}: ${PWD}\007\";${OLD_PROMPT_COMMAND}"
-        else
-            export PROMPT_COMMAND="echo -ne \"\033]0;[$arch $apps $variant] ${USER}@${HOSTNAME}: ${PWD}\007\";${OLD_PROMPT_COMMAND}"
+        if [ -z "$PROMPT_COMMAND"  ]; then
+            # No prompts
+            PROMPT_COMMAND="echo -ne \"\033]0;${USER}@${HOSTNAME}: ${PWD}\007\""
+        elif [ -z "$(echo $PROMPT_COMMAND | grep '033]0;')" ]; then
+            # Prompts exist, but no hardstatus
+            PROMPT_COMMAND="echo -ne \"\033]0;${USER}@${HOSTNAME}: ${PWD}\007\";${PROMPT_COMMAND}"
         fi
+        if [ ! -z "$ANDROID_PROMPT_PREFIX" ]; then
+            PROMPT_COMMAND=$(echo $PROMPT_COMMAND | sed -e 's/$ANDROID_PROMPT_PREFIX //g')
+        fi
+
+        if [ -z "$apps" ]; then
+            ANDROID_PROMPT_PREFIX="[${arch}-${product}-${variant}]"
+        else
+            ANDROID_PROMPT_PREFIX="[$arch $apps $variant]"
+        fi
+        export ANDROID_PROMPT_PREFIX
+
+        # Inject build data into hardstatus
+        export PROMPT_COMMAND=$(echo $PROMPT_COMMAND | sed -e 's/\\033]0;\(.*\)\\007/\\033]0;$ANDROID_PROMPT_PREFIX \1\\007/g')
     fi
 }
 
@@ -1296,6 +1308,51 @@ function cmremote()
 }
 export -f cmremote
 
+function upstream()
+{
+    git remote rm upstream 2> /dev/null
+    if [ ! -d .git ]
+    then
+        echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
+    fi
+    GERRIT_REMOTE=$(cat .git/config  | grep git://github.com | awk '{ print $NF }' | sed s#git://github.com/##g)
+    if [ -z "$GERRIT_REMOTE" ]
+    then
+        GERRIT_REMOTE=$(cat .git/config  | grep http://github.com | awk '{ print $NF }' | sed s#http://github.com/##g)
+        if [ -z "$GERRIT_REMOTE" ]
+        then
+          echo Unable to set up the git remote, are you in the root of the repo?
+          return 0
+        fi
+    fi
+    GERRIT_REMOTE=$(echo $GERRIT_REMOTE | grep androidarmv6 | awk '{ print $NF }' | sed s#androidarmv6#CyanogenMod#g)
+    git remote add upstream git://github.com/$GERRIT_REMOTE.git
+    echo You can now fetch from "upstream".
+}
+export -f upstream
+
+function githubssh()
+{
+    git remote rm githubssh 2> /dev/null
+    if [ ! -d .git ]
+    then
+        echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
+    fi
+    GERRIT_REMOTE=$(cat .git/config  | grep git://github.com | awk '{ print $NF }' | sed s#git://github.com/##g)
+    if [ -z "$GERRIT_REMOTE" ]
+    then
+        GERRIT_REMOTE=$(cat .git/config  | grep http://github.com | awk '{ print $NF }' | sed s#http://github.com/##g)
+        if [ -z "$GERRIT_REMOTE" ]
+        then
+          echo Unable to set up the git remote, are you in the root of the repo?
+          return 0
+        fi
+    fi
+    git remote add githubssh git@github.com:$GERRIT_REMOTE.git
+    echo You can now push to "githubssh".
+}
+export -f githubssh
+
 function aospremote()
 {
     git remote rm aosp 2> /dev/null
@@ -1312,6 +1369,95 @@ function aospremote()
     echo "Remote 'aosp' created"
 }
 export -f aospremote
+
+function updatenotes() {
+    if [ ! -d .git ]
+    then
+        echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
+    fi
+    GERRIT_REMOTE=$(cat .git/config  | grep git://github.com | awk '{ print $NF }' | sed s#git://github.com/##g)
+    if [ -z "$GERRIT_REMOTE" ]
+    then
+        GERRIT_REMOTE=$(cat .git/config  | grep http://github.com | awk '{ print $NF }' | sed s#http://github.com/##g)
+        if [ -z "$GERRIT_REMOTE" ]
+        then
+          echo Unable to set up the git remote, are you in the root of the repo?
+          return 0
+        fi
+    fi
+    pwd
+    ISANDROIDARMV6_REPO=$(echo $GERRIT_REMOTE | grep androidarmv6 | awk '{ print $NF }')
+    if [ -z "$ISANDROIDARMV6_REPO" ]
+    then
+        echo " I am not a androidarmv6 project."
+    else
+        cmremote
+        githubssh
+        git fetch cmremote refs/notes/review:refs/notes/review
+        git push githubssh refs/notes/review:refs/notes/review
+        echo "All notes were updated."
+    fi
+}
+export -f updatenotes
+
+function updateallnotes() {
+  repo forall -c '
+  if [ "$REPO_REMOTE" == "github" ]
+  then
+    updatenotes
+  fi
+  '
+}
+export -f updateallnotes
+
+function mergeupstream() {
+    if [ ! -d .git ]
+    then
+        echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
+    fi
+    GERRIT_REMOTE=$(cat .git/config  | grep git://github.com | awk '{ print $NF }' | sed s#git://github.com/##g)
+    if [ -z "$GERRIT_REMOTE" ]
+    then
+        GERRIT_REMOTE=$(cat .git/config  | grep http://github.com | awk '{ print $NF }' | sed s#http://github.com/##g)
+        if [ -z "$GERRIT_REMOTE" ]
+        then
+          echo Unable to set up the git remote, are you in the root of the repo?
+          return 0
+        fi
+    fi
+    pwd
+    ISANDROIDARMV6_REPO=$(echo $GERRIT_REMOTE | grep androidarmv6 | awk '{ print $NF }')
+    if [ -z "$ISANDROIDARMV6_REPO" ]
+    then
+        echo " I am not a androidarmv6 project."
+    else
+        upstream
+        githubssh
+        cmremote
+        git reset --hard
+        git clean -fd
+        git remote update
+        repo sync .
+        repo abandon cm-10.1 .
+        repo start cm-10.1 .
+        git merge upstream/cm-10.1
+        git push cmremote cm-10.1
+        git push githubssh cm-10.1
+        echo "Upstream changes have been merged."
+    fi
+}
+export -f mergeupstream
+
+function mergeupstreamall() {
+  repo forall -c '
+  if [ "$REPO_REMOTE" == "github" ]
+  then
+    mergeupstream
+  fi
+  '
+}
+export -f mergeupstreamall
+
 
 function installboot()
 {
