@@ -4,6 +4,7 @@ Invoke ". build/envsetup.sh" from your shell to add the following functions to y
 - lunch:   lunch <product_name>-<build_variant>
 - tapas:   tapas [<App1> <App2> ...] [arm|x86|mips] [eng|userdebug|user]
 - croot:   Changes directory to the top of the tree.
+- cout:    Changes directory to out.
 - m:       Makes from the top of the tree.
 - mm:      Builds all of the modules in the current directory.
 - mmp:     Builds all of the modules in the current directory and pushes them to the device.
@@ -16,11 +17,12 @@ Invoke ". build/envsetup.sh" from your shell to add the following functions to y
 - cmremote: Add git remote for CM Gerrit Review.
 - cmgerrit: A Git wrapper that fetches/pushes patch from/to CM Gerrit Review.
 - cmrebase: Rebase a Gerrit change and push it again.
-- aospremote: Add git remote for matching AOSP repository.
+- aosp:     Add git remote for matching AOSP repository.
 - mka:      Builds using SCHED_BATCH on all processors.
 - mkap:     Builds the module(s) using mka and pushes them to the device.
 - cmka:     Cleans and builds using mka.
 - reposync: Parallel repo sync using ionice and SCHED_BATCH.
+- repopick: Utility to fetch changes from Gerrit.
 - installboot: Installs a boot.img to the connected device.
 - installrecovery: Installs a recovery.img to the connected device.
 
@@ -217,8 +219,6 @@ function set_stuff_for_environment()
     set_java_home
     setpaths
     set_sequence_number
-
-    export ANDROID_BUILD_TOP=$(gettop)
 }
 
 function set_sequence_number()
@@ -252,31 +252,33 @@ function settitle()
         export ANDROID_PROMPT_PREFIX
 
         # Inject build data into hardstatus
-        export PROMPT_COMMAND=$(echo $PROMPT_COMMAND | sed -e 's/\\033]0;\(.*\)\\007/\\033]0;$ANDROID_PROMPT_PREFIX \1\\007/g')
+        export PROMPT_COMMAND="$(echo $PROMPT_COMMAND | sed -e 's/\\033]0;\(.*\)\\007/\\033]0;$ANDROID_PROMPT_PREFIX \1\\007/g')"
     fi
 }
 
 function addcompletions()
 {
-    local T dir f
-
     # Keep us from trying to run in something that isn't bash.
     if [ -z "${BASH_VERSION}" ]; then
         return
     fi
 
     # Keep us from trying to run in bash that's too old.
-    if [ ${BASH_VERSINFO[0]} -lt 3 ]; then
+    if [ "${BASH_VERSINFO[0]}" -lt 4 ] ; then
         return
     fi
 
-    dir="sdk/bash_completion"
+    local T dir f
+
+    dirs="sdk/bash_completion vendor/cm/bash_completion"
+    for dir in $dirs; do
     if [ -d ${dir} ]; then
         for f in `/bin/ls ${dir}/[a-z]*.bash 2> /dev/null`; do
             echo "including $f"
             . $f
         done
     fi
+    done
 }
 
 function choosetype()
@@ -671,7 +673,7 @@ function tapas()
 function eat()
 {
     if [ "$OUT" ] ; then
-        MODVERSION=`sed -n -e'/ro\.cm\.version/s/.*=//p' $OUT/system/build.prop`
+        MODVERSION=$(get_build_var CM_VERSION)
         ZIPFILE=cm-$MODVERSION.zip
         ZIPPATH=$OUT/$ZIPFILE
         if [ ! -f $ZIPPATH ] ; then
@@ -693,28 +695,16 @@ function eat()
         adb root
         sleep 1
         adb wait-for-device
-        SZ=`stat -c %s $ZIPPATH`
-        CACHESIZE=`adb shell busybox df -PB1 /cache | grep /cache | tr -s ' ' | cut -d ' ' -f 4`
-        if [ $CACHESIZE -gt $SZ ];
-        then
-            PUSHDIR=/cache/
-            DIR=cache
-        else
-            PUSHDIR=/storage/sdcard0/
-             # Optional path for sdcard0 in recovery
-             [ -z "$1" ] && DIR=sdcard/0 || DIR=$1
-        fi
-        echo "Pushing $ZIPFILE to $PUSHDIR"
-        if adb push $ZIPPATH $PUSHDIR ; then
-            cat << EOF > /tmp/command
---update_package=/$DIR/$ZIPFILE
+        cat << EOF > /tmp/command
+--sideload
 EOF
-            if adb push /tmp/command /cache/recovery/ ; then
-                echo "Rebooting into recovery for installation"
-                adb reboot recovery
-            fi
-            rm /tmp/command
+        if adb push /tmp/command /cache/recovery/ ; then
+            echo "Rebooting into recovery for sideload installation"
+            adb reboot recovery
+            adb wait-for-sideload
+            adb sideload $ZIPPATH
         fi
+        rm /tmp/command
     else
         echo "Nothing to eat"
         return 1
@@ -792,10 +782,17 @@ function findmakefile()
 
 function mm()
 {
+    local MM_MAKE=make
+    local ARG=
+    for ARG in $@ ; do
+        if [ "$ARG" = mka ]; then
+            MM_MAKE=mka
+        fi
+    done
     # If we're sitting in the root of the build tree, just do a
     # normal make.
     if [ -f build/core/envsetup.mk -a -f Makefile ]; then
-        make $@
+        $MM_MAKE $@
     else
         # Find the closest Android.mk file.
         T=$(gettop)
@@ -807,13 +804,14 @@ function mm()
         elif [ ! "$M" ]; then
             echo "Couldn't locate a makefile from the current directory."
         else
-            ONE_SHOT_MAKEFILE=$M make -C $T all_modules $@
+            ONE_SHOT_MAKEFILE=$M $MM_MAKE -C $T all_modules $@
         fi
     fi
 }
 
 function mmm()
 {
+    local MMM_MAKE=make
     T=$(gettop)
     if [ "$T" ]; then
         local MAKEFILE=
@@ -848,13 +846,15 @@ function mmm()
                     ARGS="$ARGS dist"
                 elif [ "$DIR" = incrementaljavac ]; then
                     ARGS="$ARGS incrementaljavac"
+                elif [ "$DIR" = mka ]; then
+                    MMM_MAKE=mka
                 else
                     echo "No Android.mk in $DIR."
                     return 1
                 fi
             fi
         done
-        ONE_SHOT_MAKEFILE="$MAKEFILE" make -C $T $DASH_ARGS $MODULES $ARGS
+        ONE_SHOT_MAKEFILE="$MAKEFILE" $MMM_MAKE -C $T $DASH_ARGS $MODULES $ARGS
     else
         echo "Couldn't locate the top of the tree.  Try setting TOP."
     fi
@@ -867,6 +867,15 @@ function croot()
         cd $(gettop)
     else
         echo "Couldn't locate the top of the tree.  Try setting TOP."
+    fi
+}
+
+function cout()
+{
+    if [  "$OUT" ]; then
+        cd $OUT
+    else
+        echo "Couldn't locate out directory.  Try setting OUT."
     fi
 }
 
@@ -1296,22 +1305,22 @@ function cmremote()
     then
         echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
     fi
-    GERRIT_REMOTE=$(cat .git/config  | grep git://github.com | awk '{ print $NF }' | sed s#git://github.com/##g)
+    GERRIT_REMOTE=$(cat .git/config | grep git://github.com/androidarmv6 | awk '{ print $NF }' | sed s#git://github.com/##g)
     if [ -z "$GERRIT_REMOTE" ]
     then
-        GERRIT_REMOTE=$(cat .git/config  | grep http://github.com | awk '{ print $NF }' | sed s#http://github.com/##g)
+        GERRIT_REMOTE=$(cat .git/config | grep http://github.com/androidarmv6 | awk '{ print $NF }' | sed s#http://github.com/##g)
         if [ -z "$GERRIT_REMOTE" ]
         then
           echo Unable to set up the git remote, are you in the root of the repo?
           return 0
         fi
     fi
-    CMUSER=`git config --get review.server.cas-online.nl:8181.username`
+    CMUSER=`git config --get review.review.androidarmv6.org.username`
     if [ -z "$CMUSER" ]
     then
-        git remote add cmremote ssh://server.cas-online.nl:29418/$GERRIT_REMOTE
+        git remote add cmremote ssh://review.androidarmv6.org:29418/$GERRIT_REMOTE
     else
-        git remote add cmremote ssh://$CMUSER@server.cas-online.nl:29418/$GERRIT_REMOTE
+        git remote add cmremote ssh://$CMUSER@review.androidarmv6.org:29418/$GERRIT_REMOTE
     fi
     echo You can now push to "cmremote".
 }
@@ -1324,10 +1333,10 @@ function upstream()
     then
         echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
     fi
-    GERRIT_REMOTE=$(cat .git/config  | grep git://github.com | awk '{ print $NF }' | sed s#git://github.com/##g)
+    GERRIT_REMOTE=$(cat .git/config | grep git://github.com/androidarmv6 | awk '{ print $NF }' | sed s#git://github.com/##g)
     if [ -z "$GERRIT_REMOTE" ]
     then
-        GERRIT_REMOTE=$(cat .git/config  | grep http://github.com | awk '{ print $NF }' | sed s#http://github.com/##g)
+        GERRIT_REMOTE=$(cat .git/config | grep http://github.com/androidarmv6 | awk '{ print $NF }' | sed s#http://github.com/##g)
         if [ -z "$GERRIT_REMOTE" ]
         then
           echo Unable to set up the git remote, are you in the root of the repo?
@@ -1347,10 +1356,10 @@ function githubssh()
     then
         echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
     fi
-    GERRIT_REMOTE=$(cat .git/config  | grep git://github.com | awk '{ print $NF }' | sed s#git://github.com/##g)
+    GERRIT_REMOTE=$(cat .git/config | grep git://github.com/androidarmv6 | awk '{ print $NF }' | sed s#git://github.com/##g)
     if [ -z "$GERRIT_REMOTE" ]
     then
-        GERRIT_REMOTE=$(cat .git/config  | grep http://github.com | awk '{ print $NF }' | sed s#http://github.com/##g)
+        GERRIT_REMOTE=$(cat .git/config | grep http://github.com/androidarmv6 | awk '{ print $NF }' | sed s#http://github.com/##g)
         if [ -z "$GERRIT_REMOTE" ]
         then
           echo Unable to set up the git remote, are you in the root of the repo?
@@ -1362,14 +1371,31 @@ function githubssh()
 }
 export -f githubssh
 
-function aospremote()
+function caf()
+{
+    git remote rm caf 2> /dev/null
+    if [ ! -d .git ]
+    then
+        echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
+    fi
+    PROJECT=`pwd -P | sed s#$ANDROID_BUILD_TOP/##g`
+    if (echo $PROJECT | grep -qv "^device")
+    then
+        PFX="platform/"
+    fi
+    git remote add caf git://codeaurora.org/$PFX$PROJECT.git
+    echo "Remote 'caf' created"
+}
+export -f caf
+
+function aosp()
 {
     git remote rm aosp 2> /dev/null
     if [ ! -d .git ]
     then
         echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
     fi
-    PROJECT=`pwd | sed s#$ANDROID_BUILD_TOP/##g`
+    PROJECT=`pwd -P | sed s#$ANDROID_BUILD_TOP/##g`
     if (echo $PROJECT | grep -qv "^device")
     then
         PFX="platform/"
@@ -1377,35 +1403,28 @@ function aospremote()
     git remote add aosp https://android.googlesource.com/$PFX$PROJECT
     echo "Remote 'aosp' created"
 }
-export -f aospremote
+export -f aosp
 
 function updatenotes() {
     if [ ! -d .git ]
     then
         echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
     fi
-    GERRIT_REMOTE=$(cat .git/config  | grep git://github.com | awk '{ print $NF }' | sed s#git://github.com/##g)
+    GERRIT_REMOTE=$(cat .git/config | grep git://github.com/androidarmv6 | awk '{ print $NF }' | sed s#git://github.com/##g)
     if [ -z "$GERRIT_REMOTE" ]
     then
-        GERRIT_REMOTE=$(cat .git/config  | grep http://github.com | awk '{ print $NF }' | sed s#http://github.com/##g)
+        GERRIT_REMOTE=$(cat .git/config | grep http://github.com/androidarmv6 | awk '{ print $NF }' | sed s#http://github.com/##g)
         if [ -z "$GERRIT_REMOTE" ]
         then
-          echo Unable to set up the git remote, are you in the root of the repo?
           return 0
         fi
     fi
     pwd
-    ISANDROIDARMV6_REPO=$(echo $GERRIT_REMOTE | grep androidarmv6 | awk '{ print $NF }')
-    if [ -z "$ISANDROIDARMV6_REPO" ]
-    then
-        echo " I am not a androidarmv6 project."
-    else
-        cmremote
-        githubssh
-        git fetch cmremote refs/notes/review:refs/notes/review
-        git push githubssh refs/notes/review:refs/notes/review
-        echo "All notes were updated."
-    fi
+    cmremote
+    githubssh
+    git fetch cmremote refs/notes/review:refs/notes/review
+    git push githubssh refs/notes/review:refs/notes/review
+    echo "All notes were updated."
 }
 export -f updatenotes
 
@@ -1419,41 +1438,57 @@ function updateallnotes() {
 }
 export -f updateallnotes
 
+# Examples:
+# mergeupstream
+# mergeupstream caf jb_2.5
+# mergeupstream aosp android-4.2.2_r1.2
 function mergeupstream() {
     if [ ! -d .git ]
     then
         echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
     fi
-    GERRIT_REMOTE=$(cat .git/config  | grep git://github.com | awk '{ print $NF }' | sed s#git://github.com/##g)
+    GERRIT_REMOTE=$(cat .git/config | grep git://github.com/androidarmv6 | awk '{ print $NF }' | sed s#git://github.com/##g)
     if [ -z "$GERRIT_REMOTE" ]
     then
-        GERRIT_REMOTE=$(cat .git/config  | grep http://github.com | awk '{ print $NF }' | sed s#http://github.com/##g)
+        GERRIT_REMOTE=$(cat .git/config | grep http://github.com/androidarmv6 | awk '{ print $NF }' | sed s#http://github.com/##g)
         if [ -z "$GERRIT_REMOTE" ]
         then
-          echo Unable to set up the git remote, are you in the root of the repo?
           return 0
         fi
     fi
-    pwd
-    ISANDROIDARMV6_REPO=$(echo $GERRIT_REMOTE | grep androidarmv6 | awk '{ print $NF }')
-    if [ -z "$ISANDROIDARMV6_REPO" ]
+
+    UPSTREAM="upstream"
+    R_BRANCH="cm-10.1"
+    if [ ! -z "$1" ]
     then
-        echo " I am not a androidarmv6 project."
+        UPSTREAM=$1
+        $UPSTREAM
     else
         upstream
-        githubssh
-        cmremote
-        git reset --hard
-        git clean -fd
-        git remote update
-        repo sync .
-        repo abandon cm-10.1 .
-        repo start cm-10.1 .
-        git merge upstream/cm-10.1
-        git push cmremote cm-10.1
-        git push githubssh cm-10.1
-        echo "Upstream changes have been merged."
     fi
+
+    if [ ! -z "$2" ]
+    then
+        R_BRANCH=$2
+    fi
+
+    pwd
+    #skip github
+    #githubssh
+    cmremote
+    repo sync . 2> /dev/null
+    git reset --hard 2> /dev/null
+    git clean -fd 2> /dev/null
+    repo sync . 2> /dev/null
+    git remote update 2> /dev/null
+    repo sync . 2> /dev/null
+    repo abandon cm-10.1 . 2> /dev/null
+    repo start cm-10.1 . 2> /dev/null
+    git merge $UPSTREAM/$R_BRANCH
+    git push cmremote cm-10.1
+    # git push cmremote(gerrit) updates github, no need manually update
+    # git push githubssh cm-10.1
+    echo "Upstream ($UPSTREAM/$R_BRANCH) changes have been merged."
 }
 export -f mergeupstream
 
@@ -1466,6 +1501,86 @@ function mergeupstreamall() {
   '
 }
 export -f mergeupstreamall
+
+# tag cm-10.1-20130501
+function tag() {
+    if [ ! -d .git ]
+    then
+        echo .git directory not found. Please run this from the root directory of the Android repository you wish to set up.
+    fi
+    GERRIT_REMOTE=$(cat .git/config | grep git://github.com/androidarmv6 | awk '{ print $NF }' | sed s#git://github.com/##g)
+    if [ -z "$GERRIT_REMOTE" ]
+    then
+        GERRIT_REMOTE=$(cat .git/config | grep http://github.com/androidarmv6 | awk '{ print $NF }' | sed s#http://github.com/##g)
+        if [ -z "$GERRIT_REMOTE" ]
+        then
+          return 0
+        fi
+    fi
+    if [ -z "$1" ]
+    then
+      echo Tag must be specified.
+      return 0
+    fi
+    R_TAG=$1
+    cmremote
+    git tag -d $R_TAG
+    git tag -a $R_TAG -m "$R_TAG"
+    git push -f cmremote $R_TAG
+    echo "Tagged: $R_TAG"
+}
+export -f tag
+
+# tagall cm-10.1-RC2 cm-10.1
+function tagall() {
+    if [ ! -d android ]
+    then
+      echo android directory not found.
+      return 0
+    fi
+    if [ -z "$1" ]
+    then
+      echo Tag must be specified...
+      return 0
+    fi
+    if [ -z "$2" ]
+    then
+      echo Branch must be specified...
+      return 0
+    fi
+    export R_TAG=$1
+    R_BRANCH=$2
+    # Remove local manifests to build the core manifest
+    rm -fr .repo/local_manifests
+    repo sync -j4
+    cd android
+    cmremote
+    git remote update
+    repo abandon $R_BRANCH .
+    repo start $R_BRANCH .
+    cd ../
+    # Create tags without android folder
+    repo forall -c '
+    if [[ "$REPO_REMOTE" == "github" && "$REPO_PATH" != "android" ]]
+    then
+      tag $R_TAG
+    fi
+    '
+    # Create manifest
+    repo manifest -o android/manifests/$R_TAG.xml -r
+    cd android
+    git add manifests/$R_TAG.xml
+    git commit -m "manifests/$R_TAG.xml"
+    git push cmremote $R_BRANCH
+    sleep 5
+    git tag -a $R_TAG -m "$R_TAG"
+    git push -f cmremote $R_TAG
+    cd ../
+    sleep 20
+    repo sync -j4
+    echo "MANIFEST: android/manifests/$R_TAG.xml"
+}
+export -f tagall
 
 
 function installboot()
@@ -1490,9 +1605,8 @@ function installboot()
     adb start-server
     adb root
     sleep 1
-    adb wait-for-device
-    adb remount
-    adb wait-for-device
+    adb wait-for-online shell mount /system 2>&1 > /dev/null
+    adb wait-for-online remount
     if (adb shell cat /system/build.prop | grep -q "ro.cm.device=$CM_BUILD");
     then
         adb push $OUT/boot.img /cache/
@@ -1534,9 +1648,8 @@ function installrecovery()
     adb start-server
     adb root
     sleep 1
-    adb wait-for-device
-    adb remount
-    adb wait-for-device
+    adb wait-for-online shell mount /system 2>&1 >> /dev/null
+    adb wait-for-online remount
     if (adb shell cat /system/build.prop | grep -q "ro.cm.device=$CM_BUILD");
     then
         adb push $OUT/recovery.img /cache/
@@ -1581,7 +1694,7 @@ function cmgerrit() {
         $FUNCNAME help
         return 1
     fi
-    local user=`git config --get review.server.cas-online.nl:8181.username`
+    local user=`git config --get review.review.androidarmv6.org.username`
     local review=`git config --get remote.github.review`
     local project=`git config --get remote.github.projectname`
     local command=$1
@@ -1838,7 +1951,7 @@ function cmrebase() {
     echo "Bringing it up to date..."
     repo sync .
     echo "Fetching change..."
-    git fetch "http://server.cas-online.nl:8181/$repo" "refs/changes/$refs" && git cherry-pick FETCH_HEAD
+    git fetch "http://review.androidarmv6.org/$repo" "refs/changes/$refs" && git cherry-pick FETCH_HEAD
     if [ "$?" != "0" ]; then
         echo "Error cherry-picking. Not uploading!"
         return
@@ -1967,6 +2080,11 @@ alias mmmp='dopush mmm'
 alias mkap='dopush mka'
 alias cmkap='dopush cmka'
 
+function repopick() {
+    T=$(gettop)
+    $T/build/tools/repopick.py $@
+}
+
 
 # Force JAVA_HOME to point to java 1.6 if it isn't already set
 function set_java_home() {
@@ -2002,3 +2120,5 @@ done
 unset f
 
 addcompletions
+
+export ANDROID_BUILD_TOP=$(gettop)
