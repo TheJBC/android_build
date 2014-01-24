@@ -57,7 +57,8 @@ PRODUCT_PACKAGES += \
     sensorservice \
     uiautomator
 
-PRODUCT_BOOT_JARS := core:conscrypt:okhttp:core-junit:bouncycastle:ext:framework:framework2:android.policy:services:apache-xml:webviewchromium
+#PRODUCT_BOOT_JARS := core:conscrypt:okhttp:core-junit:bouncycastle:ext:framework:framework2:android.policy:services:apache-xml:webviewchromium
+PRODUCT_BOOT_JARS := core:conscrypt:okhttp:core-junit:bouncycastle:ext:framework:framework2:android.policy:services:apache-xml
 
 PRODUCT_RUNTIMES := runtime_libdvm_default
 PRODUCT_RUNTIMES += runtime_libart
